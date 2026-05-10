@@ -10,7 +10,7 @@
 | Nombre del sistema | Grúa Torre – Control Dual |
 | Versión de firmware | Arduino: v2.0 · ESP32: v1.0 |
 | Autor | Martín Rosero |
-| Repositorio GitHub | [PG_2526_Martin_Rosero](https://github.com/martinrrosero70/PG_2526_Martin_Rosero) |
+| Repositorio GitHub | [PG_2526_Martin_Rosero](https://github.com/martinrrosero70-web/PG_2526_Martin_Rosero) |
 
 ### 1.1 Descripción funcional
 
