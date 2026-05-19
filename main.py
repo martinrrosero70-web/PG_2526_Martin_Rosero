@@ -8,6 +8,7 @@
 #    GET  /          -> HTML del panel de control
 #    POST /cmd?c=X   -> Enviar comando X por UART (F/B/U/D/L/R/S)
 #    GET  /status    -> JSON { "ip": "...", "last_cmd": "X" }
+#    GET  /telemetry -> JSON de telemetría del sistema
 # ============================================================
 
 import uasyncio as asyncio
@@ -24,6 +25,13 @@ led = Pin(2, Pin.OUT)
 
 # ── Estado global ────────────────────────────────────────────
 last_cmd = "S"
+telemetry = {
+  "start_ms": time.ticks_ms(),
+  "commands": {"F": 0, "B": 0, "U": 0, "D": 0, "L": 0, "R": 0, "S": 0},
+  "http_requests": 0,
+  "http_errors": 0,
+  "last_error": None,
+}
 
 # ── HTML del panel de control (cadena Python) ────────────────
 HTML = """\
@@ -174,6 +182,30 @@ HTML = """\
     color: var(--accent2);
     letter-spacing: 0.05em;
   }
+  .telemetry-box {
+    margin-top: 18px;
+    background: var(--surface);
+    border: 1px solid #30363d;
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    width: 100%;
+    max-width: 600px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+    color: var(--text);
+  }
+  .telemetry-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 0.9rem;
+  }
+  .telemetry-item span:last-child {
+    color: var(--accent2);
+    font-weight: 700;
+    font-size: 1.1rem;
+  }
   @media (max-width: 400px) {
     :root { --btn-size: 68px; }
     .panels { grid-template-columns: 1fr; }
@@ -242,6 +274,32 @@ HTML = """\
   <span>Ultimo comando enviado:</span>
   <span id="lastCmd">--</span>
 </div>
+<div class="telemetry-box">
+  <div class="telemetry-item">
+    <span>Uptime</span>
+    <span id="uptime">--</span>
+  </div>
+  <div class="telemetry-item">
+    <span>Comandos totales</span>
+    <span id="cmdCount">--</span>
+  </div>
+  <div class="telemetry-item">
+    <span>Solicitudes HTTP</span>
+    <span id="httpRequests">--</span>
+  </div>
+  <div class="telemetry-item">
+    <span>Errores HTTP</span>
+    <span id="httpErrors">--</span>
+  </div>
+  <div class="telemetry-item">
+    <span>LED estado</span>
+    <span id="ledState">--</span>
+  </div>
+  <div class="telemetry-item">
+    <span>IP actual</span>
+    <span id="ipAddr">--</span>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -260,6 +318,7 @@ HTML = """\
       if(r.ok){
         document.getElementById('lastCmd').textContent =
           cmd + ' \u2014 ' + (CMD_MAP[cmd] || cmd);
+        updateTelemetry();
       }
     } catch(e){
       document.getElementById('connStatus').textContent = 'Error de conexion';
@@ -292,6 +351,23 @@ HTML = """\
       );
     }
   });
+  async function updateTelemetry(){
+    try {
+      const r = await fetch('/telemetry');
+      if(!r.ok) return;
+      const t = await r.json();
+      document.getElementById('uptime').textContent = t.uptime_s + ' s';
+      document.getElementById('cmdCount').textContent = Object.values(t.commands).reduce((a,b) => a + b, 0);
+      document.getElementById('httpRequests').textContent = t.http_requests;
+      document.getElementById('httpErrors').textContent = t.http_errors;
+      document.getElementById('ledState').textContent = t.led;
+      document.getElementById('ipAddr').textContent = t.ip;
+    } catch (e) {
+      // Ignorar errores de telemetría de UI
+    }
+  }
+  updateTelemetry();
+  setInterval(updateTelemetry, 4000);
 })();
 </script>
 </body>
@@ -328,9 +404,13 @@ def get_local_ip():
         return wlan.ifconfig()[0]
     return "0.0.0.0"
 
+def get_uptime_seconds():
+  return time.ticks_diff(time.ticks_ms(), telemetry["start_ms"]) // 1000
+
 # ── Manejador de conexiones HTTP ─────────────────────────────
 async def handle_client(reader, writer):
     global last_cmd
+    telemetry["http_requests"] += 1
     try:
         request_line = await asyncio.wait_for(reader.readline(), timeout=3)
         request_line = request_line.decode("utf-8", "ignore").strip()
@@ -350,15 +430,16 @@ async def handle_client(reader, writer):
 
         # ── POST /cmd?c=X ── Enviar comando UART ─────────────
         elif path == "/cmd" and method == "POST":
-            cmd = get_query_param(qs, "c")
-            valid = ("F", "B", "U", "D", "L", "R", "S")
-            if cmd and cmd in valid:
-                uart.write(cmd)
-                last_cmd = cmd
-                led.on() if cmd != "S" else led.off()
-                body = ujson.dumps({"ok": True, "cmd": cmd})
-            else:
-                body = ujson.dumps({"ok": False, "error": "invalid cmd"})
+          cmd = get_query_param(qs, "c")
+          valid = ("F", "B", "U", "D", "L", "R", "S")
+          if cmd and cmd in valid:
+            uart.write(cmd)
+            last_cmd = cmd
+            telemetry["commands"][cmd] += 1
+            led.on() if cmd != "S" else led.off()
+            body = ujson.dumps({"ok": True, "cmd": cmd})
+          else:
+            body = ujson.dumps({"ok": False, "error": "invalid cmd"})
             response = ("HTTP/1.1 200 OK\r\n"
                         "Content-Type: application/json\r\n"
                         "Connection: close\r\n\r\n" + body)
@@ -372,12 +453,31 @@ async def handle_client(reader, writer):
                         "Connection: close\r\n\r\n" + body)
             writer.write(response.encode())
 
+        # ── GET /telemetry ── JSON de telemetría del sistema ───────
+        elif path == "/telemetry" and method == "GET":
+          body = ujson.dumps({
+            "ip": get_local_ip(),
+            "last_cmd": last_cmd,
+            "uptime_s": get_uptime_seconds(),
+            "commands": telemetry["commands"],
+            "http_requests": telemetry["http_requests"],
+            "http_errors": telemetry["http_errors"],
+            "last_error": telemetry["last_error"],
+            "led": "on" if led.value() else "off",
+          })
+          response = ("HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Connection: close\r\n\r\n" + body)
+          writer.write(response.encode())
+
         # ── 404 ──────────────────────────────────────────────
         else:
             writer.write(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
 
         await writer.drain()
     except Exception as e:
+        telemetry["http_errors"] += 1
+        telemetry["last_error"] = str(e)
         print("[HTTP] Error:", e)
     finally:
         writer.close()
