@@ -440,10 +440,12 @@ async def handle_client(reader, writer):
             body = ujson.dumps({"ok": True, "cmd": cmd})
           else:
             body = ujson.dumps({"ok": False, "error": "invalid cmd"})
-            response = ("HTTP/1.1 200 OK\r\n"
-                        "Content-Type: application/json\r\n"
-                        "Connection: close\r\n\r\n" + body)
-            writer.write(response.encode())
+          # ✅ CORRECCIÓN: la respuesta se construye FUERA del if/else
+          #    para que se envíe siempre (tanto cmd válido como inválido)
+          response = ("HTTP/1.1 200 OK\r\n"
+                      "Content-Type: application/json\r\n"
+                      "Connection: close\r\n\r\n" + body)
+          writer.write(response.encode())
 
         # ── GET /status ── JSON de estado ────────────────────
         elif path == "/status" and method == "GET":

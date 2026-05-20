@@ -138,10 +138,16 @@ void loop() {
 
   // 6. Control stepper (no bloqueante vía AccelStepper)
   if (finalGiroDir != 0) {
+    // Velocidad según la fuente de control
+    //   - Joystick: velocidad máxima (STEPPER_MAX_SPEED)
+    //   - Web:      velocidad reducida (WEB_STEPPER_SPEED) para mayor precisión
+    float stepSpeed = (webGiroDir != 0 && joyGiroDir == 0)
+                      ? WEB_STEPPER_SPEED
+                      : STEPPER_MAX_SPEED;
+    stepper.setMaxSpeed(stepSpeed);
     // Genera un objetivo "lejano" en la dirección deseada para movimiento continuo
     long target = stepper.currentPosition() + (long)(finalGiroDir) * 100000L;
     stepper.moveTo(target);
-    stepper.setMaxSpeed(STEPPER_MAX_SPEED);
   } else {
     // Detener suavemente
     stepper.stop();
