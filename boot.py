@@ -1,65 +1,94 @@
 import network
 import time
-import machine
-from machine import Pin
+import uasyncio as asyncio
+from machine import Pin, UART
 
-# ── Configuración WiFi ───────────────────────────────────────
-WIFI_SSID = 'Cudy-0138'
-WIFI_PASS = '41659458'
+# =============================================================================
+# CONFIGURACIÓN DE RED
+# =============================================================================
+RED_CASA = "Moises"
+CLAVE_CASA = "1357924609moi"
 
-# ── LED de estado ────────────────────────────────────────────
-led = Pin(2, Pin.OUT)
+led_indicador = Pin(2, Pin.OUT)
 
-def blink(times=3, delay=0.15):
-    """Parpadea el LED N veces para indicar estado."""
-    for _ in range(times):
-        led.on();  time.sleep(delay)
-        led.off(); time.sleep(delay)
+# ── UART hacia Arduino Nano ──────────────────────────────────
+uart = UART(2, baudrate=9600, tx=17, rx=16)
 
 def conectar_wifi():
-    """Conecta al WiFi previniendo el error de estado interno."""
     wlan = network.WLAN(network.STA_IF)
-
-    # 1. FORZAR RESET DEL ESTADO INTERNO DEL WIFI
-    print("[WiFi] Limpiando estado previo de la radio...")
-    wlan.active(False)   # Desactivar por completo
-    time.sleep(1)        # Pausa física para que el chip se apague
-
-    # 2. ACTIVAR E INICIAR CONEXIÓN
-    wlan.active(True)    # Volver a activar de forma limpia
-
+    wlan.active(True)
+    time.sleep(1) 
+    if not wlan.isconnected():
+        print("Conectando a la red Wi-Fi...", end="")
+        wlan.connect(RED_CASA, CLAVE_CASA)
+        intentos = 0
+        while not wlan.isconnected() and intentos < 30:
+            led_indicador.value(not led_indicador.value())
+            time.sleep(0.5)
+            print(".", end="")
+            intentos += 1
+            
     if wlan.isconnected():
-        print("[WiFi] Ya conectado:", wlan.ifconfig()[0])
-        led.on()
-        return
-
-    print("[WiFi] Conectando a '{}' ...".format(WIFI_SSID))
-    wlan.connect(WIFI_SSID, WIFI_PASS)
-
-    # Contador de intentos para evitar bucles infinitos
-    for intento in range(20):
-        if wlan.isconnected():
-            break
-        blink(1, 0.4)
-        print("[WiFi] Intento {}/20 ...".format(intento + 1))
-        time.sleep(0.5)
-
-    if wlan.isconnected():
-        ip = wlan.ifconfig()[0]
-        print('=============================================')
-        print('  GRUA TORRE - Servidor Web ESP32')
-        print('  IP:', ip)
-        print('  URL: http://' + ip)
-        print('=============================================')
-        blink(3, 0.1)
-        led.on()
+        led_indicador.value(1)
+        config = wlan.ifconfig()
+        return config[0]
     else:
-        print("[WiFi] Error: No se pudo conectar. Verifica SSID/Contrasena.")
-        print("[WiFi] Reiniciando placa para solucionar error de hardware...")
-        time.sleep(2)
-        machine.reset()
+        led_indicador.value(0)
+        return "0.0.0.0"
 
-# ── Punto de entrada de boot.py ──────────────────────────────
-# IMPORTANTE: boot.py SOLO conecta el WiFi.
-# El servidor web completo se inicia en main.py automáticamente.
-conectar_wifi()
+# Guardamos el HTML en una sola línea sólida para evitar errores de sintaxis
+def obtener_html():
+    return "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Control Grua Torre</title><style>body { font-family: Arial; text-align: center; background-color: #222; color: #fff; } h1 { color: #ffcc00; } .btn { display: inline-block; padding: 15px 25px; font-size: 18px; margin: 10px; cursor: pointer; background-color: #444; color: white; border: 2px solid #ffcc00; border-radius: 8px; width: 120px; } .btn:active { background-color: #ffcc00; color: black; } .stop { background-color: #aa0000; border-color: #ff3333; } .stop:active { background-color: #ff3333; }</style></head><body><h1>🏗️ CONTROL GRÚA TORRE</h1><p>Utiliza los botones para operar el sistema.</p><hr color='#ffcc00'><div><button class='btn' onclick=\"fetch('/subir')\">⬆️ Subir</button></div><div><button class='btn' onclick=\"fetch('/izquierda')\">⬅️ Izquierda</button><button class='btn stop' onclick=\"fetch('/parar')\">🛑 PARAR</button><button class='btn' onclick=\"fetch('/derecha')\">Derecha ➡️</button></div><div><button class='btn' onclick=\"fetch('/bajar')\">⬇️ Bajar</button></div></body></html>"
+
+async def handle_client(reader, writer):
+    try:
+        request_line = await reader.readline()
+        request = request_line.decode("utf-8")
+        while True:
+            line = await reader.readline()
+            if line == b"\r\n" or line == b"\n" or not line:
+                break
+        
+        if "GET /subir" in request:
+            print("[Acción] Grúa subiendo...")
+            uart.write("U")
+        elif "GET /bajar" in request:
+            print("[Acción] Grúa bajando...")
+            uart.write("D")
+        elif "GET /izquierda" in request:
+            print("[Acción] Girando a la izquierda...")
+            uart.write("L")
+        elif "GET /derecha" in request:
+            print("[Acción] Girando a la derecha...")
+            uart.write("R")
+        elif "GET /parar" in request:
+            print("[Acción] 🛑 Sistema Detenido.")
+            uart.write("S")
+            
+        response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + obtener_html()
+        writer.write(response.encode("utf-8"))
+        await writer.drain()
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        await writer.close()
+
+async def main(ip_asignada):
+    print("\n=============================================")
+    print("  GRUA TORRE - Servidor Web ESP32")
+    print(f"  IP: {ip_asignada}")
+    print(f"  URL: http://{ip_asignada}")
+    print("=============================================")
+    server = await asyncio.start_server(handle_client, "0.0.0.0", 80)
+    while True:
+        await asyncio.sleep(3600)
+
+# Lanzamiento limpio del script
+ip = conectar_wifi()
+if ip != "0.0.0.0":
+    try:
+        asyncio.run(main(ip))
+    except KeyboardInterrupt:
+        print("\nServidor apagado.")
+else:
+    print("\nError: No se conectó al Wi-Fi.")
