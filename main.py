@@ -1,506 +1,195 @@
-# ============================================================
-#  GRUA TORRE - main.py  (ESP32 MicroPython)
-# ============================================================
-#  Servidor web asincrono (uasyncio) + UART hacia Arduino Nano
-#  Puerto UART TX: GPIO 17  @  9600 bps
-#
-#  Endpoints HTTP:
-#    GET  /          -> HTML del panel de control
-#    POST /cmd?c=X   -> Enviar comando X por UART (F/B/U/D/L/R/S)
-#    GET  /status    -> JSON { "ip": "...", "last_cmd": "X" }
-#    GET  /telemetry -> JSON de telemetría del sistema
-# ============================================================
-
 import uasyncio as asyncio
 import network
 import ujson
 from machine import UART, Pin
 import time
 
-# ── UART hacia Arduino Nano ──────────────────────────────────
+# Configuración de periféricos de la Grúa
 uart = UART(2, baudrate=9600, tx=17, rx=16)
-
-# ── LED de estado ────────────────────────────────────────────
 led = Pin(2, Pin.OUT)
 
-# ── Estado global ────────────────────────────────────────────
 last_cmd = "S"
 telemetry = {
-  "start_ms": time.ticks_ms(),
-  "commands": {"F": 0, "B": 0, "U": 0, "D": 0, "L": 0, "R": 0, "S": 0},
-  "http_requests": 0,
-  "http_errors": 0,
-  "last_error": None,
+    "start_ms": time.ticks_ms(),
+    "commands": {"F": 0, "B": 0, "U": 0, "D": 0, "L": 0, "R": 0, "S": 0},
+    "http_requests": 0,
+    "http_errors": 0,
 }
 
-# ── HTML del panel de control (cadena Python) ────────────────
-HTML = """\
-<!DOCTYPE html>
-<html lang="es">
+def obtener_html():
+    # Interfaz optimizada y limpia
+    return """<!DOCTYPE html>
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Control Grua Torre</title>
-<style>
-  :root {
-    --bg: #0d1117;
-    --surface: #161b22;
-    --surface2: #21262d;
-    --accent: #f78166;
-    --accent2: #79c0ff;
-    --text: #e6edf3;
-    --muted: #8b949e;
-    --radius: 16px;
-    --btn-size: 80px;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Segoe UI', system-ui, sans-serif;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 24px 16px;
-  }
-  header {
-    text-align: center;
-    margin-bottom: 28px;
-  }
-  header h1 {
-    font-size: 1.8rem;
-    font-weight: 700;
-    background: linear-gradient(135deg, var(--accent2), var(--accent));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-  }
-  header p { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
-  .status-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: var(--surface2);
-    border: 1px solid #30363d;
-    border-radius: 50px;
-    padding: 6px 16px;
-    font-size: 0.8rem;
-    color: var(--muted);
-    margin-bottom: 32px;
-  }
-  .dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: #3fb950;
-    animation: pulse 2s infinite;
-  }
-  @keyframes pulse {
-    0%,100% { opacity: 1; }
-    50%      { opacity: 0.4; }
-  }
-  .panels {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    width: 100%;
-    max-width: 600px;
-  }
-  .panel {
-    background: var(--surface);
-    border: 1px solid #30363d;
-    border-radius: var(--radius);
-    padding: 20px;
-  }
-  .panel h2 {
-    font-size: 0.75rem;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: var(--muted);
-    margin-bottom: 16px;
-    text-align: center;
-  }
-  .dpad {
-    display: grid;
-    grid-template-columns: repeat(3, var(--btn-size));
-    grid-template-rows:  repeat(3, var(--btn-size));
-    gap: 6px;
-    justify-content: center;
-  }
-  .dpad .empty { visibility: hidden; }
-  .btn {
-    width: var(--btn-size);
-    height: var(--btn-size);
-    border: none;
-    border-radius: 14px;
-    font-size: 1.6rem;
-    cursor: pointer;
-    background: var(--surface2);
-    color: var(--text);
-    transition: background 0.15s, transform 0.1s, box-shadow 0.15s;
-    user-select: none;
-    -webkit-user-select: none;
-    touch-action: manipulation;
-  }
-  .btn:hover  { background: #2d333b; }
-  .btn:active,
-  .btn.active { background: var(--accent); transform: scale(0.93); box-shadow: 0 0 18px rgba(247,129,102,.45); }
-  .btn.stop {
-    background: #6e40c9;
-    grid-column: 2; grid-row: 2;
-  }
-  .btn.stop:active { background: #9a6cf0; box-shadow: 0 0 18px rgba(110,64,201,.5); }
-  .rotation-panel { grid-column: span 2; }
-  .rot-row {
-    display: flex;
-    justify-content: center;
-    gap: 12px;
-    margin-top: 8px;
-  }
-  .btn-wide {
-    width: 140px;
-    height: 64px;
-    font-size: 1.3rem;
-    border-radius: 14px;
-  }
-  .last-cmd-box {
-    margin-top: 28px;
-    background: var(--surface);
-    border: 1px solid #30363d;
-    border-radius: var(--radius);
-    padding: 14px 20px;
-    width: 100%;
-    max-width: 600px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-  .last-cmd-box span { color: var(--muted); font-size: 0.85rem; }
-  #lastCmd {
-    font-size: 1.4rem;
-    font-weight: 700;
-    color: var(--accent2);
-    letter-spacing: 0.05em;
-  }
-  .telemetry-box {
-    margin-top: 18px;
-    background: var(--surface);
-    border: 1px solid #30363d;
-    border-radius: var(--radius);
-    padding: 18px 20px;
-    width: 100%;
-    max-width: 600px;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-    color: var(--text);
-  }
-  .telemetry-item {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 0.9rem;
-  }
-  .telemetry-item span:last-child {
-    color: var(--accent2);
-    font-weight: 700;
-    font-size: 1.1rem;
-  }
-  @media (max-width: 400px) {
-    :root { --btn-size: 68px; }
-    .panels { grid-template-columns: 1fr; }
-    .rotation-panel { grid-column: 1; }
-  }
-</style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Control Grua Torre</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+        .container { background: white; border-radius: 20px; padding: 30px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); max-width: 400px; width: 100%; }
+        h1 { text-align: center; color: #333; margin-bottom: 30px; font-size: 28px; }
+        .control-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; }
+        .btn { padding: 20px; font-size: 18px; font-weight: bold; border: none; border-radius: 12px; background: #3498db; color: white; cursor: pointer; transition: all 0.2s; touch-action: manipulation; }
+        .btn:active { transform: scale(0.95); opacity: 0.8; }
+        .btn-stop { grid-column: span 3; background: #e74c3c; font-size: 20px; padding: 25px; }
+        .btn-stop:active { background: #c0392b; }
+        .status { background: #ecf0f1; border-radius: 10px; padding: 15px; text-align: center; font-size: 14px; color: #555; }
+    </style>
 </head>
 <body>
-
-<header>
-  <h1>&#x1F3D7; Grua Torre</h1>
-  <p>Control Remoto &mdash; ESP32 MicroPython</p>
-</header>
-
-<div class="status-bar">
-  <div class="dot"></div>
-  <span id="connStatus">Conectado al ESP32</span>
-</div>
-
-<div class="panels">
-
-  <!-- Panel Carro (horizontal) -->
-  <div class="panel">
-    <h2>&#x1F69B; Carro</h2>
-    <div class="dpad">
-      <div class="empty"></div>
-      <button class="btn" id="btnF" data-cmd="F">&#x25B2;</button>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <button class="btn stop" id="btnS" data-cmd="S">&#x23F9;</button>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <button class="btn" id="btnB" data-cmd="B">&#x25BC;</button>
-      <div class="empty"></div>
+    <div class="container">
+        <h1>Grua Torre</h1>
+        <div class="control-grid">
+            <button class="btn" onclick="send('U')">Subir</button>
+            <button class="btn" onclick="send('F')">Adelante</button>
+            <button class="btn" onclick="send('D')">Bajar</button>
+            <button class="btn" onclick="send('L')">Izq</button>
+            <button class="btn" onclick="send('S')">Centro</button>
+            <button class="btn" onclick="send('R')">Der</button>
+            <button class="btn btn-stop" onclick="send('S')">PARAR</button>
+        </div>
+        <div class="status"><strong>Ultimo comando:</strong> <span id="cmd">-</span></div>
     </div>
-  </div>
-
-  <!-- Panel Elevacion -->
-  <div class="panel">
-    <h2>&#x1F4E6; Elevacion</h2>
-    <div class="dpad">
-      <div class="empty"></div>
-      <button class="btn" id="btnU" data-cmd="U">&#x2B06;</button>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <div class="empty"></div>
-      <button class="btn" id="btnD" data-cmd="D">&#x2B07;</button>
-      <div class="empty"></div>
-    </div>
-  </div>
-
-  <!-- Panel Rotacion -->
-  <div class="panel rotation-panel">
-    <h2>&#x1F504; Rotacion (Nema 17)</h2>
-    <div class="rot-row">
-      <button class="btn btn-wide" id="btnL" data-cmd="L">&#x21A9; Izq</button>
-      <button class="btn btn-wide" id="btnR" data-cmd="R">Der &#x21AA;</button>
-    </div>
-  </div>
-
-</div>
-
-<div class="last-cmd-box">
-  <span>Ultimo comando enviado:</span>
-  <span id="lastCmd">--</span>
-</div>
-<div class="telemetry-box">
-  <div class="telemetry-item">
-    <span>Uptime</span>
-    <span id="uptime">--</span>
-  </div>
-  <div class="telemetry-item">
-    <span>Comandos totales</span>
-    <span id="cmdCount">--</span>
-  </div>
-  <div class="telemetry-item">
-    <span>Solicitudes HTTP</span>
-    <span id="httpRequests">--</span>
-  </div>
-  <div class="telemetry-item">
-    <span>Errores HTTP</span>
-    <span id="httpErrors">--</span>
-  </div>
-  <div class="telemetry-item">
-    <span>LED estado</span>
-    <span id="ledState">--</span>
-  </div>
-  <div class="telemetry-item">
-    <span>IP actual</span>
-    <span id="ipAddr">--</span>
-  </div>
-</div>
-
-<script>
-(function(){
-  const HOLD_INTERVAL = 200;   // ms entre envios al mantener presionado
-  const CMD_MAP = {
-    'F':'Carro Adelante','B':'Carro Atras',
-    'U':'Subir','D':'Bajar',
-    'L':'Giro Izq','R':'Giro Der','S':'Stop'
-  };
-  let holdTimer = null;
-  let activeBtn = null;
-
-  async function sendCmd(cmd){
-    try {
-      const r = await fetch('/cmd?c=' + cmd, {method:'POST'});
-      if(r.ok){
-        document.getElementById('lastCmd').textContent =
-          cmd + ' \u2014 ' + (CMD_MAP[cmd] || cmd);
-        updateTelemetry();
-      }
-    } catch(e){
-      document.getElementById('connStatus').textContent = 'Error de conexion';
-    }
-  }
-
-  function startHold(btn){
-    const cmd = btn.dataset.cmd;
-    btn.classList.add('active');
-    activeBtn = btn;
-    sendCmd(cmd);
-    holdTimer = setInterval(() => sendCmd(cmd), HOLD_INTERVAL);
-  }
-
-  function stopHold(){
-    if(holdTimer){ clearInterval(holdTimer); holdTimer = null; }
-    if(activeBtn){ activeBtn.classList.remove('active'); activeBtn = null; }
-    sendCmd('S');
-  }
-
-  document.querySelectorAll('.btn').forEach(btn => {
-    const isStop = btn.dataset.cmd === 'S';
-
-    btn.addEventListener('mousedown',  e => { e.preventDefault(); isStop ? sendCmd('S') : startHold(btn); });
-    btn.addEventListener('touchstart', e => { e.preventDefault(); isStop ? sendCmd('S') : startHold(btn); }, {passive:false});
-
-    if(!isStop){
-      ['mouseup','mouseleave','touchend','touchcancel'].forEach(ev =>
-        btn.addEventListener(ev, e => { e.preventDefault(); stopHold(); })
-      );
-    }
-  });
-  async function updateTelemetry(){
-    try {
-      const r = await fetch('/telemetry');
-      if(!r.ok) return;
-      const t = await r.json();
-      document.getElementById('uptime').textContent = t.uptime_s + ' s';
-      document.getElementById('cmdCount').textContent = Object.values(t.commands).reduce((a,b) => a + b, 0);
-      document.getElementById('httpRequests').textContent = t.http_requests;
-      document.getElementById('httpErrors').textContent = t.http_errors;
-      document.getElementById('ledState').textContent = t.led;
-      document.getElementById('ipAddr').textContent = t.ip;
-    } catch (e) {
-      // Ignorar errores de telemetría de UI
-    }
-  }
-  updateTelemetry();
-  setInterval(updateTelemetry, 4000);
-})();
-</script>
+    <script>
+        function send(c){
+            fetch('/cmd?c=' + c, { method: 'POST' })
+            .then(r => r.json())
+            .then(d => { document.getElementById('cmd').innerText = c; })
+            .catch(e => console.error(e));
+        }
+    </script>
 </body>
-</html>
-"""
+</html>"""
 
-# ── Helper: parsear ruta y query de la solicitud HTTP ────────
-def parse_request(request_line):
-    """Devuelve (metodo, path, query_string)."""
+def parse_request_line(request_line):
     try:
-        parts = request_line.split(" ")
-        method = parts[0]
-        full_path = parts[1] if len(parts) > 1 else "/"
-        if "?" in full_path:
-            path, qs = full_path.split("?", 1)
-        else:
-            path, qs = full_path, ""
-        return method, path, qs
+        line = request_line.decode("utf-8").strip()
+        parts = line.split()
+        if len(parts) >= 2:
+            return parts[0], parts[1]
     except Exception:
-        return "GET", "/", ""
+        pass
+    return None, None
 
-def get_query_param(qs, key):
-    """Extrae valor de un parametro en la query string."""
-    for pair in qs.split("&"):
-        if "=" in pair:
-            k, v = pair.split("=", 1)
-            if k == key:
-                return v
+def get_ip():
+    wlan = network.WLAN(network.STA_IF)
+    if wlan.active() and wlan.isconnected():
+        return wlan.ifconfig()[0]
     return None
 
-def get_local_ip():
-    wlan = network.WLAN(network.STA_IF)
-    if wlan.isconnected():
-        return wlan.ifconfig()[0]
-    return "0.0.0.0"
-
-def get_uptime_seconds():
-  return time.ticks_diff(time.ticks_ms(), telemetry["start_ms"]) // 1000
-
-# ── Manejador de conexiones HTTP ─────────────────────────────
 async def handle_client(reader, writer):
     global last_cmd
     telemetry["http_requests"] += 1
+    linea_leida = b"" 
+    
     try:
-        request_line = await asyncio.wait_for(reader.readline(), timeout=3)
-        request_line = request_line.decode("utf-8", "ignore").strip()
+        request_line = await reader.readline()
+        if not request_line:
+            return
 
-        # Consumir cabeceras restantes
+        linea_leida = request_line
+        method, path = parse_request_line(request_line)
+        
+        if not method or method not in ["GET", "POST", "PUT", "DELETE"]:
+            return
+
+        # Vaciar cabeceras
         while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=2)
-            if line in (b"\r\n", b"\n", b""):
+            line = await reader.readline()
+            if line == b"\r\n" or line == b"\n" or not line:
                 break
 
-        method, path, qs = parse_request(request_line)
+        # RUTA 1: Servir la interfaz Web principal
+        if method == "GET" and path in ["/", "/index.html"]:
+            body = obtener_html()
+            body_bytes = body.encode('utf-8')
+            
+            # Formateamos SOLO la cabecera para evitar que interfiera con el CSS
+            header = ("HTTP/1.1 200 OK\r\n"
+                      "Content-Type: text/html; charset=utf-8\r\n"
+                      "Content-Length: {}\r\n"
+                      "Connection: close\r\n\r\n").format(len(body_bytes))
+                      
+            writer.write(header.encode('utf-8'))
+            writer.write(body_bytes)
 
-        # ── GET / ── Panel de control HTML ───────────────────
-        if path == "/" and method == "GET":
-            response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n" + HTML
-            writer.write(response.encode())
-
-        # ── POST /cmd?c=X ── Enviar comando UART ─────────────
-        elif path == "/cmd" and method == "POST":
-          cmd = get_query_param(qs, "c")
-          valid = ("F", "B", "U", "D", "L", "R", "S")
-          if cmd and cmd in valid:
-            uart.write(cmd)
-            last_cmd = cmd
-            telemetry["commands"][cmd] += 1
-            led.on() if cmd != "S" else led.off()
-            body = ujson.dumps({"ok": True, "cmd": cmd})
-          else:
-            body = ujson.dumps({"ok": False, "error": "invalid cmd"})
-          # ✅ CORRECCIÓN: la respuesta se construye FUERA del if/else
-          #    para que se envíe siempre (tanto cmd válido como inválido)
-          response = ("HTTP/1.1 200 OK\r\n"
+        # RUTA 2: Recepción de comandos de control
+        elif method == "POST" and "/cmd?c=" in path:
+            idx = path.find("?c=")
+            c = path[idx + 3:idx + 4].upper()
+            
+            if c in ["F", "B", "U", "D", "L", "R", "S"]:
+                last_cmd = c
+                telemetry["commands"][c] += 1
+                uart.write(c.encode())
+                led.value(0 if c == "S" else 1)
+                body = ujson.dumps({"status": "ok", "cmd": c})
+            else:
+                body = ujson.dumps({"status": "error", "msg": "comando invalido"})
+            
+            body_bytes = body.encode('utf-8')
+            header = ("HTTP/1.1 200 OK\r\n"
                       "Content-Type: application/json\r\n"
-                      "Connection: close\r\n\r\n" + body)
-          writer.write(response.encode())
+                      "Content-Length: {}\r\n"
+                      "Connection: close\r\n\r\n").format(len(body_bytes))
+            
+            writer.write(header.encode('utf-8'))
+            writer.write(body_bytes)
 
-        # ── GET /status ── JSON de estado ────────────────────
-        elif path == "/status" and method == "GET":
-            body = ujson.dumps({"ip": get_local_ip(), "last_cmd": last_cmd})
-            response = ("HTTP/1.1 200 OK\r\n"
-                        "Content-Type: application/json\r\n"
-                        "Connection: close\r\n\r\n" + body)
-            writer.write(response.encode())
-
-        # ── GET /telemetry ── JSON de telemetría del sistema ───────
-        elif path == "/telemetry" and method == "GET":
-          body = ujson.dumps({
-            "ip": get_local_ip(),
-            "last_cmd": last_cmd,
-            "uptime_s": get_uptime_seconds(),
-            "commands": telemetry["commands"],
-            "http_requests": telemetry["http_requests"],
-            "http_errors": telemetry["http_errors"],
-            "last_error": telemetry["last_error"],
-            "led": "on" if led.value() else "off",
-          })
-          response = ("HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Connection: close\r\n\r\n" + body)
-          writer.write(response.encode())
-
-        # ── 404 ──────────────────────────────────────────────
+        # RUTA 3: Panel de telemetría
+        elif method == "GET" and path == "/status":
+            body = ujson.dumps({
+                "connected": True,
+                "last_cmd": last_cmd,
+                "uptime": int(time.ticks_diff(time.ticks_ms(), telemetry["start_ms"]) / 1000),
+                "requests": telemetry["http_requests"],
+            })
+            body_bytes = body.encode('utf-8')
+            header = ("HTTP/1.1 200 OK\r\n"
+                      "Content-Type: application/json\r\n"
+                      "Content-Length: {}\r\n"
+                      "Connection: close\r\n\r\n").format(len(body_bytes))
+            
+            writer.write(header.encode('utf-8'))
+            writer.write(body_bytes)
+        
         else:
-            writer.write(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
+            writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
 
         await writer.drain()
+
     except Exception as e:
         telemetry["http_errors"] += 1
-        telemetry["last_error"] = str(e)
-        print("[HTTP] Error:", e)
+        print("[ERROR CRÍTICO] Tipo: {}, Msg: {} en línea: {}".format(type(e).__name__, e, linea_leida))
     finally:
-        writer.close()
-        await writer.wait_closed()
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except:
+            pass
 
-# ── Main asincrono ────────────────────────────────────────────
 async def main():
-    ip = get_local_ip()
+    ip = get_ip()
+    if not ip:
+        print("[ERROR] No hay conexion WiFi disponible")
+        return
+    
     print("=" * 45)
-    print("  GRUA TORRE - Servidor Web ESP32")
-    print("  IP:", ip)
-    print("  URL: http://{}".format(ip))
+    print("  SERVIDOR GRUA TORRE")
+    print("  IP: http://{}".format(ip))
     print("=" * 45)
+    
+    try:
+        server = await asyncio.start_server(handle_client, "0.0.0.0", 80)
+        print("[HTTP] Servidor iniciado en puerto 80")
+        while True:
+            await asyncio.sleep(3600)
+    except Exception as e:
+        print("[ERROR] No se pudo iniciar el servidor: {}".format(e))
 
-    server = await asyncio.start_server(handle_client, "0.0.0.0", 80)
-    print("[Server] Escuchando en puerto 80 ...")
-    async with server:
-        await server.serve_forever()
-
-# ── Punto de entrada ──────────────────────────────────────────
+# Inicialización limpia de la tarea principal
 try:
     asyncio.run(main())
 except KeyboardInterrupt:
-    print("[Server] Detenido por usuario.")
+    print("\n[INFO] Servidor web detenido correctamente.")
