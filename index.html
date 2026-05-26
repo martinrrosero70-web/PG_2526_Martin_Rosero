@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <title>Grúa Torre — Panel de Control</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+
+        :root {
+            --bg-primary: #0a0e27;
+            --bg-secondary: #131738;
+            --bg-card: rgba(255, 255, 255, 0.04);
+            --bg-card-hover: rgba(255, 255, 255, 0.08);
+            --accent: #6366f1;
+            --accent-glow: rgba(99, 102, 241, 0.4);
+            --success: #22c55e;
+            --danger: #ef4444;
+            --danger-glow: rgba(239, 68, 68, 0.4);
+            --warning: #f59e0b;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: rgba(255, 255, 255, 0.06);
+            --radius: 16px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow-x: hidden;
+        }
+
+        /* Animated background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background:
+                radial-gradient(ellipse at 20% 50%, rgba(99, 102, 241, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 80%, rgba(59, 130, 246, 0.05) 0%, transparent 50%);
+            animation: bgShift 20s ease-in-out infinite alternate;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        @keyframes bgShift {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            100% { transform: translate(-2%, -2%) rotate(3deg); }
+        }
+
+        .app {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 440px;
+            padding: 20px 16px 32px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 8px 0 4px;
+        }
+
+        .header-icon {
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 12px;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            box-shadow: 0 8px 32px var(--accent-glow);
+            animation: iconPulse 3s ease-in-out infinite;
+        }
+
+        @keyframes iconPulse {
+            0%, 100% { box-shadow: 0 8px 32px var(--accent-glow); }
+            50% { box-shadow: 0 8px 48px rgba(99, 102, 241, 0.6); }
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #f1f5f9, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 13px;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Connection status */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            backdrop-filter: blur(12px);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(34, 197, 94, 0.6);
+            animation: dotPulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+            animation: none;
+        }
+
+        @keyframes dotPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .status-text {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        /* Card sections */
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            backdrop-filter: blur(12px);
+        }
+
+        .card-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 14px;
+        }
+
+        /* Control Grid */
+        .controls {
+            display: grid;
+            grid-template-areas:
+                ".    up   ."
+                "left stop right"
+                ".    down .";
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+        }
+
+        .btn {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 18px 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 20px;
+            font-weight: 700;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: all 0.15s ease;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        .btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255,255,255,0.05), transparent);
+            pointer-events: none;
+        }
+
+        .btn-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn:active {
+            transform: scale(0.93);
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow), inset 0 0 20px rgba(99,102,241,0.1);
+        }
+
+        .btn.active {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.12);
+            box-shadow: 0 0 24px var(--accent-glow);
+        }
+
+        .btn[data-dir="up"]    { grid-area: up; }
+        .btn[data-dir="down"]  { grid-area: down; }
+        .btn[data-dir="left"]  { grid-area: left; }
+        .btn[data-dir="right"] { grid-area: right; }
+
+        .btn-stop {
+            grid-area: stop;
+            background: rgba(239, 68, 68, 0.12);
+            border-color: rgba(239, 68, 68, 0.25);
+            color: var(--danger);
+        }
+
+        .btn-stop:active {
+            border-color: var(--danger);
+            box-shadow: 0 0 24px var(--danger-glow), inset 0 0 20px rgba(239,68,68,0.1);
+        }
+
+        .btn-stop .btn-label {
+            color: rgba(239, 68, 68, 0.6);
+        }
+
+        /* Vertical controls */
+        .vertical-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .btn-vert {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 20px 8px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 14px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 22px;
+            font-weight: 700;
+            cursor: pointer;
+            touch-action: manipulation;
+            transition: all 0.15s ease;
+            user-select: none;
+        }
+
+        .btn-vert::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: linear-gradient(135deg, rgba(255,255,255,0.05), transparent);
+            pointer-events: none;
+        }
+
+        .btn-vert .btn-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-vert:active {
+            transform: scale(0.95);
+            border-color: var(--accent);
+            box-shadow: 0 0 20px var(--accent-glow);
+        }
+
+        .btn-vert.active {
+            border-color: var(--accent);
+            background: rgba(99, 102, 241, 0.12);
+            box-shadow: 0 0 24px var(--accent-glow);
+        }
+
+        .btn-up-color { border-color: rgba(34,197,94,0.2); }
+        .btn-up-color:active,
+        .btn-up-color.active {
+            border-color: var(--success);
+            box-shadow: 0 0 20px rgba(34,197,94,0.4);
+            background: rgba(34,197,94,0.1);
+        }
+        .btn-up-color .btn-label { color: rgba(34,197,94,0.5); }
+
+        .btn-down-color { border-color: rgba(245,158,11,0.2); }
+        .btn-down-color:active,
+        .btn-down-color.active {
+            border-color: var(--warning);
+            box-shadow: 0 0 20px rgba(245,158,11,0.4);
+            background: rgba(245,158,11,0.1);
+        }
+        .btn-down-color .btn-label { color: rgba(245,158,11,0.5); }
+
+        /* Telemetry panel */
+        .telemetry {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+        }
+
+        .tele-item {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 14px 10px;
+            text-align: center;
+        }
+
+        .tele-value {
+            font-size: 20px;
+            font-weight: 800;
+            color: var(--text-primary);
+            line-height: 1;
+        }
+
+        .tele-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 6px;
+        }
+
+        /* Last command display */
+        .last-cmd {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+
+        .last-cmd-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .last-cmd-value {
+            font-size: 16px;
+            font-weight: 800;
+            color: var(--accent);
+            padding: 4px 12px;
+            background: rgba(99, 102, 241, 0.1);
+            border-radius: 8px;
+            min-width: 40px;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+        /* Feedback toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 10px 20px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            backdrop-filter: blur(16px);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .toast.error {
+            border-color: rgba(239,68,68,0.3);
+            color: var(--danger);
+        }
+
+        /* Ripple effect */
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.15);
+            transform: scale(0);
+            animation: rippleAnim 0.5s ease-out forwards;
+            pointer-events: none;
+        }
+
+        @keyframes rippleAnim {
+            to { transform: scale(3); opacity: 0; }
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 8px 0 0;
+        }
+
+        .footer p {
+            font-size: 11px;
+            color: var(--text-muted);
+            letter-spacing: 0.3px;
+        }
+
+        /* Loading skeleton */
+        @keyframes shimmer {
+            0% { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+
+        /* Responsive */
+        @media (max-width: 360px) {
+            .app { padding: 16px 12px 24px; }
+            .btn { padding: 14px 6px; font-size: 18px; }
+            .btn-vert { padding: 16px 6px; font-size: 20px; }
+        }
+
+        @media (min-width: 500px) {
+            .app { padding: 32px 24px 40px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-icon">🏗️</div>
+            <h1>Grúa Torre</h1>
+            <p>Panel de Control Remoto</p>
+        </div>
+
+        <!-- Connection Status -->
+        <div class="status-bar">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-text" id="statusText">Conectado</span>
+        </div>
+
+        <!-- Directional Controls -->
+        <div class="card">
+            <div class="card-label">Movimiento Horizontal</div>
+            <div class="controls">
+                <button class="btn" data-dir="up" data-cmd="F" onclick="send('F', this)">
+                    <span>↑</span>
+                    <span class="btn-label">Adelante</span>
+                </button>
+                <button class="btn" data-dir="left" data-cmd="L" onclick="send('L', this)">
+                    <span>←</span>
+                    <span class="btn-label">Izquierda</span>
+                </button>
+                <button class="btn btn-stop" data-cmd="S" onclick="send('S', this)">
+                    <span>■</span>
+                    <span class="btn-label">Parar</span>
+                </button>
+                <button class="btn" data-dir="right" data-cmd="R" onclick="send('R', this)">
+                    <span>→</span>
+                    <span class="btn-label">Derecha</span>
+                </button>
+                <button class="btn" data-dir="down" data-cmd="B" onclick="send('B', this)">
+                    <span>↓</span>
+                    <span class="btn-label">Atrás</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Vertical Controls -->
+        <div class="card">
+            <div class="card-label">Movimiento Vertical</div>
+            <div class="vertical-controls">
+                <button class="btn-vert btn-up-color" data-cmd="U" onclick="send('U', this)">
+                    <span>▲</span>
+                    <span class="btn-label">Subir</span>
+                </button>
+                <button class="btn-vert btn-down-color" data-cmd="D" onclick="send('D', this)">
+                    <span>▼</span>
+                    <span class="btn-label">Bajar</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Telemetry -->
+        <div class="card">
+            <div class="card-label">Telemetría</div>
+            <div class="last-cmd">
+                <span class="last-cmd-label">Último comando</span>
+                <span class="last-cmd-value" id="lastCmd">—</span>
+            </div>
+            <div style="height: 12px;"></div>
+            <div class="telemetry">
+                <div class="tele-item">
+                    <div class="tele-value" id="teleReqs">0</div>
+                    <div class="tele-label">Peticiones</div>
+                </div>
+                <div class="tele-item">
+                    <div class="tele-value" id="teleUptime">0s</div>
+                    <div class="tele-label">Uptime</div>
+                </div>
+                <div class="tele-item">
+                    <div class="tele-value" id="teleStatus">OK</div>
+                    <div class="tele-label">Estado</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <p>PG-2526 · Martín Rosero · ESP32</p>
+        </div>
+    </div>
+
+    <!-- Toast notification -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+        // --- State ---
+        let activeBtn = null;
+        let toastTimer = null;
+        let statusPollTimer = null;
+
+        // --- Command map for display ---
+        const cmdNames = {
+            'F': 'Adelante', 'B': 'Atrás',
+            'L': 'Izquierda', 'R': 'Derecha',
+            'U': 'Subir', 'D': 'Bajar', 'S': 'Parar'
+        };
+
+        // --- Send command ---
+        function send(cmd, btn) {
+            // Ripple effect
+            if (btn) {
+                createRipple(btn);
+                highlightBtn(btn);
+            }
+
+            fetch('/cmd?c=' + cmd, { method: 'POST' })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.status === 'ok') {
+                        updateLastCmd(cmd);
+                        showToast('✓ ' + (cmdNames[cmd] || cmd), false);
+                        setOnline(true);
+                    } else {
+                        showToast('⚠ Comando inválido', true);
+                    }
+                })
+                .catch(function(e) {
+                    showToast('✕ Sin conexión', true);
+                    setOnline(false);
+                    console.error('Error:', e);
+                });
+        }
+
+        // --- Update last command display ---
+        function updateLastCmd(cmd) {
+            var el = document.getElementById('lastCmd');
+            el.textContent = cmdNames[cmd] || cmd;
+            el.style.transform = 'scale(1.15)';
+            setTimeout(function() { el.style.transform = 'scale(1)'; }, 200);
+        }
+
+        // --- Button highlight ---
+        function highlightBtn(btn) {
+            if (activeBtn) activeBtn.classList.remove('active');
+            btn.classList.add('active');
+            activeBtn = btn;
+
+            // Auto-remove for stop button
+            if (btn.dataset.cmd === 'S') {
+                setTimeout(function() { btn.classList.remove('active'); activeBtn = null; }, 400);
+            }
+        }
+
+        // --- Ripple effect ---
+        function createRipple(btn) {
+            var ripple = document.createElement('span');
+            ripple.className = 'ripple';
+            var rect = btn.getBoundingClientRect();
+            var size = Math.max(rect.width, rect.height);
+            ripple.style.width = ripple.style.height = size + 'px';
+            ripple.style.left = (rect.width / 2 - size / 2) + 'px';
+            ripple.style.top = (rect.height / 2 - size / 2) + 'px';
+            btn.appendChild(ripple);
+            setTimeout(function() { ripple.remove(); }, 500);
+        }
+
+        // --- Toast notification ---
+        function showToast(msg, isError) {
+            var toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.className = 'toast' + (isError ? ' error' : '') + ' show';
+
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(function() {
+                toast.classList.remove('show');
+            }, 1800);
+        }
+
+        // --- Online/Offline status ---
+        function setOnline(online) {
+            var dot = document.getElementById('statusDot');
+            var text = document.getElementById('statusText');
+            var statusVal = document.getElementById('teleStatus');
+
+            if (online) {
+                dot.className = 'status-dot';
+                text.textContent = 'Conectado';
+                statusVal.textContent = 'OK';
+                statusVal.style.color = '';
+            } else {
+                dot.className = 'status-dot offline';
+                text.textContent = 'Sin Conexión';
+                statusVal.textContent = '—';
+                statusVal.style.color = 'var(--danger)';
+            }
+        }
+
+        // --- Poll telemetry ---
+        function pollStatus() {
+            fetch('/status')
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    setOnline(true);
+                    document.getElementById('teleReqs').textContent = d.requests || 0;
+
+                    var up = d.uptime || 0;
+                    var h = Math.floor(up / 3600);
+                    var m = Math.floor((up % 3600) / 60);
+                    var s = up % 60;
+                    var uptimeStr = '';
+                    if (h > 0) uptimeStr += h + 'h ';
+                    if (m > 0 || h > 0) uptimeStr += m + 'm ';
+                    uptimeStr += s + 's';
+                    document.getElementById('teleUptime').textContent = uptimeStr.trim();
+
+                    if (d.last_cmd && cmdNames[d.last_cmd]) {
+                        updateLastCmd(d.last_cmd);
+                    }
+                })
+                .catch(function() {
+                    setOnline(false);
+                });
+        }
+
+        // Poll every 5 seconds
+        pollStatus();
+        statusPollTimer = setInterval(pollStatus, 5000);
+
+        // --- Keyboard controls ---
+        document.addEventListener('keydown', function(e) {
+            var map = {
+                'ArrowUp': 'F', 'ArrowDown': 'B',
+                'ArrowLeft': 'L', 'ArrowRight': 'R',
+                'w': 'U', 's': 'D',
+                ' ': 'S'
+            };
+            var cmd = map[e.key];
+            if (cmd) {
+                e.preventDefault();
+                var btn = document.querySelector('[data-cmd="' + cmd + '"]');
+                send(cmd, btn);
+            }
+        });
+    </script>
+</body>
+</html>
